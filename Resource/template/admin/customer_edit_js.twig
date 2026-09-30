@@ -1,0 +1,29 @@
+{# 会員編集画面: 運営者が受信可否を「受け取らない → 受け取る」に戻したとき、
+   その読者が blastmail 側で自分から解除していれば確認を出す。
+   「意図マージ・あと勝ち」方針のときだけサーバーが解除ありと答える（安全モードでは上書きされないので出さない）。 #}
+{% if Customer is defined and Customer.id %}
+    <script>
+        (function () {
+            var form = document.querySelector('form[name="admin_customer"]') || document.querySelector('#form1') || document.forms[0];
+            if (!form) { return; }
+            var box = form.querySelector('input[type="checkbox"][name$="[blastmailOptIn]"], input[type="checkbox"][name$="[mailmagaFlg]"]');
+            if (!box) { return; }
+            var wasChecked = box.checked;      // 画面を開いた時点の値
+            var confirmed = false;
+            form.addEventListener('submit', function (e) {
+                if (confirmed || wasChecked || !box.checked) { return; }   // 受け取らない → 受け取る のときだけ確認する
+                e.preventDefault();
+                fetch('{{ url('blastmail_sync_admin_customer_cancel_check', {'id': Customer.id}) }}', {credentials: 'same-origin'})
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d.cancelled && !window.confirm('この会員は blastmail 側でご自身で配信を解除しています。\n運営側の操作で配信を再開しますか？')) {
+                            return;   // 中断。チェックは触らずに画面へ戻す
+                        }
+                        confirmed = true;
+                        form.submit();
+                    })
+                    .catch(function () { confirmed = true; form.submit(); });   // 取得できないときは止めない
+            });
+        })();
+    </script>
+{% endif %}

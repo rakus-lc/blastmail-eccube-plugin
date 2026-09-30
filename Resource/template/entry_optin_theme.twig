@@ -1,0 +1,18 @@
+{# 会員登録・マイページの受信可否の描画（auto_render の form_theme として適用される） #}
+{% block form_row %}
+    <dl>
+        <dt>
+            {{ form_label(form, form.vars.label, { 'label_attr': {'class': 'ec-label' }}) }}
+        </dt>
+        <dd>
+            <div class="ec-checkbox{{ has_errors(form) ? ' error' }}">
+                <label>
+                    {{ form_widget(form) }}
+                    <span>新商品やキャンペーンのお知らせを受け取る</span>
+                </label>
+                {{ form_errors(form) }}
+            </div>
+            <p class="ec-para-normal">配信の停止は、マイページからいつでも変更できます。</p>
+        </dd>
+    </dl>
+{% endblock %}

@@ -1,0 +1,249 @@
+{% extends '@admin/default_frame.twig' %}
+
+{% set menus = ['customer', 'blastmail_sync_config'] %}
+
+{% block title %}blastmail連携設定{% endblock %}
+{% block sub_title %}会員管理{% endblock %}
+
+{% form_theme form '@admin/Form/bootstrap_4_horizontal_layout.html.twig' %}
+
+{% block main %}
+    <form role="form" method="post">
+        {{ form_widget(form._token) }}
+        {# 接続テスト（isTokenValid）用のグローバル CSRF トークン #}
+        <input type="hidden" name="{{ constant('Eccube\\Common\\Constant::TOKEN_NAME') }}" value="{{ csrf_token(constant('Eccube\\Common\\Constant::TOKEN_NAME')) }}">
+
+        <div class="c-contentsArea__cols">
+            <div class="c-contentsArea__primaryCol">
+                <div class="c-primaryCol">
+
+                    <div class="card rounded border-0 mb-4">
+                        <div class="card-header"><span>API 接続</span></div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">
+                                blastmail 管理画面「契約情報 ＞ アカウント情報」の API キーと、ログイン ID・パスワードを入力します。
+                                パスワードと API キーは、サーバーの <code>ECCUBE_AUTH_MAGIC</code> から派生した鍵で暗号化して保存します（DB のみの流出では復号できません）。
+                                環境変数 <code>BLASTMAIL_SYNC_USERNAME</code> / <code>BLASTMAIL_SYNC_PASSWORD</code> / <code>BLASTMAIL_SYNC_API_KEY</code> / <code>BLASTMAIL_SYNC_BASE_URL</code> が設定されている場合はそちらが優先され、DB には保存しない運用もできます。
+                            </p>
+                            {% if secretWeak %}
+                                <div class="alert alert-warning py-2">
+                                    <code>ECCUBE_AUTH_MAGIC</code> が既定値または短すぎます。暗号化の鍵が推測可能になるため、.env で十分に長いランダムな値を設定してください（変更後はここでパスワード・API キーを再入力）。
+                                </div>
+                            {% endif %}
+                            {% if storedPlain %}
+                                <div class="alert alert-info py-2">
+                                    保存済みの認証情報が暗号化前の形式です。この画面で「登録」を押すと暗号化して保存し直します。
+                                </div>
+                            {% endif %}
+                            <div class="row mb-2">
+                                <div class="col-3"><span>API ベース URL</span><span class="badge bg-primary ml-1">必須</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.apiBaseUrl) }}{{ form_errors(form.apiBaseUrl) }}
+                                    {% if envOverride.base_url %}<small class="text-info">環境変数で上書きされています</small>{% endif %}
+                                    <small class="text-muted d-block">独自ドメイン契約の場合は API のホストも変わります。</small>
+                                </div>
+                            </div>
+                            <div class="row mb-2">
+                                <div class="col-3"><span>ログイン ID</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.username) }}{{ form_errors(form.username) }}
+                                    {% if envOverride.username %}<small class="text-info">環境変数で上書きされています</small>{% endif %}
+                                </div>
+                            </div>
+                            <div class="row mb-2">
+                                <div class="col-3"><span>パスワード</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.password, {'attr': {'autocomplete': 'new-password', 'placeholder': Config.password ? '（設定済み。変更する場合のみ入力）' : ''}}) }}{{ form_errors(form.password) }}
+                                    {% if envOverride.password %}<small class="text-info">環境変数で上書きされています</small>{% endif %}
+                                </div>
+                            </div>
+                            <div class="row mb-2">
+                                <div class="col-3"><span>API キー</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.apiKey, {'attr': {'autocomplete': 'new-password', 'placeholder': Config.apiKey ? '（設定済み。変更する場合のみ入力）' : ''}}) }}{{ form_errors(form.apiKey) }}
+                                    {% if envOverride.api_key %}<small class="text-info">環境変数で上書きされています</small>{% endif %}
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-3"></div>
+                                <div class="col">
+                                    <button type="submit" class="btn btn-ec-regular" name="test_connection" value="1">保存して接続テスト</button>
+                                    <small class="text-muted ml-2">この画面の入力内容を保存したうえで blastmail にログインし、項目一覧を取得します。</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card rounded border-0 mb-4">
+                        <div class="card-header"><span>同期の対象と動作</span></div>
+                        <div class="card-body">
+                            <div class="row mb-3">
+                                <div class="col-3"><span>同期する会員</span></div>
+                                <div class="col">{{ form_widget(form.syncTarget) }}{{ form_errors(form.syncTarget) }}</div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>同期方式</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.syncMode) }}{{ form_errors(form.syncMode) }}
+                                    <small class="text-muted d-block">差分では、メールアドレスの変更は読者 ID 指定で書き換え（履歴を維持）、対象外になった会員は下の「退会・削除時」の動作に従います。全件に切り替えたい一時的な用途は <code>bin/console blastmail:sync --full</code>。</small>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>配信状態（受信可否）の扱い</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.statusPolicy) }}{{ form_errors(form.statusPolicy) }}
+                                    <small class="text-muted d-block">
+                                        通常の同期 CSV に状態列は含めません（含めると blastmail 側の配信停止が「配信中」に戻ってしまうため）。
+                                        状態を変える必要がある会員だけ、メールアドレスと状態の 2 列だけの CSV で別送します。
+                                    </small>
+                                    <table class="table table-sm mt-2 mb-0 small">
+                                        <thead><tr><th>EC-CUBE の受信可否</th><th>blastmail 側の状態</th><th>動作（意図マージ）</th></tr></thead>
+                                        <tbody>
+                                        <tr><td>変わった</td><td>前回から変わっていない</td><td>EC-CUBE の値を送る。「解除」は<strong>安全</strong>なら送らず、<strong>あと勝ち</strong>なら上書きして「配信中」に戻す</td></tr>
+                                        <tr><td>変わった</td><td>前回から変わった</td><td>順序が分からないので停止側を採る。blastmail が解除・配信停止なら EC-CUBE を「受け取らない」に取り込む</td></tr>
+                                        <tr><td>変わっていない</td><td>解除・配信停止</td><td>送らない。EC-CUBE を「受け取らない」に取り込む（下の双方向オプトアウトが有効なとき）</td></tr>
+                                        <tr><td>変わっていない</td><td>配信中</td><td>触らない</td></tr>
+                                        <tr><td>初回で「受信しない」</td><td>配信中</td><td>「配信停止」を送る</td></tr>
+                                        <tr><td>どれでも</td><td>エラー停止</td><td>送らない（宛先の事実。意思では覆らない）</td></tr>
+                                        <tr><td>どれでも</td><td>解除（<strong>安全</strong>のとき）</td><td>送らない。双方向オプトアウトが有効なら EC-CUBE 側を「受け取らない」に揃える</td></tr>
+                                        </tbody>
+                                    </table>
+                                    <small class="text-muted d-block mt-1">
+                                        <strong>安全</strong>と<strong>あと勝ち</strong>の違いは「読者本人が配信解除リンクから解除した読者」の扱いだけです。
+                                        <strong>安全</strong>は誰の操作でも解除を覆しません（会員がマイページで「受け取る」に戻した場合も再開しません。再開するには本人に blastmail 側で登録し直してもらいます）。
+                                        上書きしなかったことは同期ログに会員のアドレス付きで残ります。
+                                        <strong>あと勝ち</strong>は EC-CUBE 側の新しい操作で再開します。管理画面の会員編集で「受け取らない → 受け取る」に変えたときだけ、保存時に確認を表示します。
+                                        <br>「blastmail を正とする」は上のどれも行わず、読者一覧の取得もしません。EC-CUBE で「受け取らない」にしても blastmail には伝わらないことを承知のうえで選んでください。
+                                        「EC-CUBE を正とする」は毎回 EC-CUBE の値で上書きしますが、読者本人の「解除」とエラー停止だけは上書きしません。
+                                    </small>
+                                    <div class="alert {{ hasOptInField ? 'alert-secondary' : 'alert-warning' }} py-2 mt-2 mb-0 small">
+                                        {% if hasOptInField %}
+                                            受信可否の判定に使う項目: {{ optInSource }}。会員編集画面で切り替えられます。
+                                        {% else %}
+                                            この EC-CUBE には会員ごとの受信可否の項目がありません。本会員はすべて「受信する」として扱い、退会・削除と同期対象外だけが「配信停止」になります。
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>双方向オプトアウト・エラー停止連携</span></div>
+                                <div class="col">
+                                    <div class="form-check mt-2">{{ form_widget(form.optoutImportEnabled, {'label': '双方向オプトアウト: blastmail 側の「解除」「配信停止」を会員の受信可否に反映する（「配信中」は戻さない）'}) }}</div>
+                                    <small class="text-muted d-block">blastmail の配信解除リンクから解除した会員は、次回同期で EC-CUBE 側も「受け取らない」になります。逆方向（EC-CUBE の「受け取らない」→ blastmail の配信停止）は方針が「blastmail を正とする」以外なら常に行います。外すと、blastmail 側の解除は EC-CUBE に戻りません。</small>
+                                    <div class="form-check mt-2">{{ form_widget(form.bounceSyncEnabled, {'label': 'エラー停止連携: blastmail の「エラー停止」を会員の宛先状態に取り込み、宛先不明の会員は受信可否に関係なく「エラー停止」として送る'}) }}</div>
+                                    <small class="text-muted d-block">会員の宛先状態の列は blastengine 連携プラグインが持ちます。{% if not bounceSupported %}<span class="text-danger">現在この環境には宛先状態の列が無いため、有効にしても取り込みと状態送信は行われません。</span>{% endif %} 宛先不明の会員がメールアドレスを変えると、次回同期で受信可否に応じた状態に戻します。</small>
+                                    <small class="text-muted d-block">性能の目安: 「意図マージ（安全・あと勝ち）」「EC-CUBE を正とする」は同期ごとに blastmail から配信停止・解除・エラー停止の読者一覧（CSV）を取得します。時間とメモリは停止系読者の数に比例します。数十万件を超える停止系読者があるなら「blastmail を正とする」も検討してください。</small>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>高度な設定</span></div>
+                                <div class="col">
+                                    <div class="mb-2">
+                                        <span class="d-block">会員イベントの反映方法</span>
+                                        {{ form_widget(form.eventSyncTiming) }}{{ form_errors(form.eventSyncTiming) }}
+                                        <small class="text-muted d-block">「応答後」は PHP-FPM 構成で効果があります（応答を返してから blastmail へ送る）。それ以外の構成では体感が変わらないことがあります。どちらでも失敗はログに残り、次回の定期同期で回収されます。</small>
+                                    </div>
+                                    <div>
+                                        <span class="d-block">同時実行ロック</span>
+                                        {{ form_widget(form.lockMode) }}{{ form_errors(form.lockMode) }}
+                                        <small class="text-muted d-block">ファイルロックはサーバーごとに独立なので、Web・cron を複数サーバーで動かす構成では「DB」を選んでください。SQLite などアドバイザリロックの無い DB では自動でファイルに切り替わります。</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>退会・削除時</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.withdrawAction) }}{{ form_errors(form.withdrawAction) }}
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>会員イベントで即時反映</span></div>
+                                <div class="col">
+                                    <div class="form-check">{{ form_widget(form.eventSyncEnabled, {'label': '会員登録・編集・退会・削除のタイミングで blastmail に反映する'}) }}</div>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-3"><span>1 回に送る最大行数</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.batchSize) }}{{ form_errors(form.batchSize) }}
+                                    <small class="text-muted d-block">これを超える会員数は CSV を分割して順に送ります（blastmail 側はアカウント単位で 1 本ずつ処理）。既定 50,000 行（約 6MB）。会員は 1,000 件ずつ読み込むので、会員数が多くてもメモリは増えません。</small>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-3"><span>CSV 文字コード</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.csvCharset) }}
+                                    <small class="text-muted d-block">blastmail 側は文字コードを自動判定します（判定不能時は Shift_JIS 扱い）。通常は UTF-8 のままで問題ありません。</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card rounded border-0 mb-4">
+                        <div class="card-header"><span>項目マッピング（EC-CUBE の値 → blastmail の項目）</span></div>
+                        <div class="card-body">
+                            <p class="text-muted small">
+                                右側に blastmail 側の項目「表示名」を入力します（項目は blastmail 管理画面「読者項目の設定」であらかじめ作成してください）。空欄の項目は同期しません。
+                                {% if defines is not empty %}
+                                    <br>blastmail から取得した使用中の項目:
+                                    {% for d in defines %}<span class="badge bg-light text-dark border mr-1">{{ d.name }}<small class="text-muted"> ({{ d.id }})</small></span>{% endfor %}
+                                {% elseif defineError %}
+                                    <br><span class="text-danger">項目一覧の取得に失敗: {{ defineError }}</span>
+                                {% endif %}
+                            </p>
+                            <p class="mb-3">
+                                <button type="submit" class="btn btn-ec-regular btn-sm" name="auto_map" value="1">保存して項目名を自動で割り当てる</button>
+                                <small class="text-muted ml-2">
+                                    blastmail の項目一覧と同じ名前（全角半角・空白・記号の違いは無視）の項目を、<strong>空欄の欄だけ</strong>に入れます。入力済みの欄は変えません。
+                                    「累計」と「累積」のように語そのものが違うものは一致しないので、手で入力してください。
+                                </small>
+                            </p>
+                            <datalist id="bm-defines">
+                                {% for d in defines %}<option value="{{ d.name }}"></option>{% endfor %}
+                            </datalist>
+                            <div class="row mb-2">
+                                <div class="col-3"><span>メールアドレス</span><span class="badge bg-primary ml-1">必須</span></div>
+                                <div class="col">
+                                    {{ form_widget(form.mapping_email, {'attr': {'list': 'bm-defines'}}) }}{{ form_errors(form.mapping_email) }}
+                                    <small class="text-muted">blastmail のメールアドレス項目（初期表示名は E-Mail）</small>
+                                </div>
+                            </div>
+                            {% for key, meta in catalog %}
+                                <div class="row mb-2">
+                                    <div class="col-3"><span>{{ meta[0] }}</span></div>
+                                    <div class="col">
+                                        {{ form_widget(attribute(form, 'mapping_' ~ key), {'attr': {'list': 'bm-defines', 'placeholder': '同期しない'}}) }}
+                                        {{ form_errors(attribute(form, 'mapping_' ~ key)) }}
+                                        {% if meta[1] %}<small class="text-muted">{{ meta[1] }}</small>{% endif %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <div class="c-conversionArea">
+            <div class="c-conversionArea__container">
+                <div class="row justify-content-between align-items-center">
+                    <div class="col-6">
+                        <div class="c-conversionArea__leftBlockItem">
+                            <a class="c-baseLink" href="{{ url('blastmail_sync_admin_index') }}">
+                                <i class="fa fa-backward" aria-hidden="true"></i><span>blastmail連携へ戻る</span>
+                            </a>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="row align-items-center justify-content-end">
+                            <div class="col-auto">
+                                <button class="btn btn-ec-conversion px-5" type="submit">登録</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+{% endblock %}

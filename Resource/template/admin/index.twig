@@ -1,0 +1,173 @@
+{% extends '@admin/default_frame.twig' %}
+
+{% set menus = ['customer', 'blastmail_sync'] %}
+
+{% block title %}blastmail連携{% endblock %}
+{% block sub_title %}会員管理{% endblock %}
+
+{% block javascript %}
+    {% if running %}
+    <script>setTimeout(function () { location.reload(); }, 5000);</script>
+    {% endif %}
+{% endblock %}
+
+{% block main %}
+    <div class="c-contentsArea__cols">
+        <div class="c-contentsArea__primaryCol">
+            <div class="c-primaryCol">
+
+                {% if running %}
+                    {% set pct = targetCount > 0 ? min(100, (running.processed * 100 / targetCount)|round) : 0 %}
+                    <div class="card rounded border-0 mb-4 border-left border-primary">
+                        <div class="card-header"><span>同期を実行中です</span></div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                開始 {{ running.createDate|date('Y/m/d H:i:s') }} ／ 契機 {{ running.trigger }} ／
+                                走査 {{ running.processed|number_format }} / {{ targetCount|number_format }} 名 ／ 送信済み {{ running.total|number_format }} 行
+                            </p>
+                            <div class="progress" style="height: 1.25rem;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: {{ pct }}%">{{ pct }}%</div>
+                            </div>
+                            <small class="text-muted d-block mt-2">この画面は 5 秒ごとに自動更新します。実行中はボタンからの同期はできません（最終更新 {{ running.updateDate|date('H:i:s') }}）。</small>
+                        </div>
+                    </div>
+                {% endif %}
+
+                <div class="card rounded border-0 mb-4">
+                    <div class="card-header"><span>会員 → blastmail 読者 の同期</span></div>
+                    <div class="card-body">
+                        {% if not configured %}
+                            <div class="alert alert-warning">
+                                blastmail の API 認証情報が未設定です。<a href="{{ url('blastmail_sync_admin_config') }}">blastmail連携設定</a> から登録してください。
+                            </div>
+                        {% endif %}
+                        {% if tooLarge %}
+                            <div class="alert alert-info">
+                                対象会員が {{ directLimit|number_format }} 名を超えています（{{ targetCount|number_format }} 名）。処理に時間がかかるため、管理画面のボタンからは実行できません。
+                                サーバーで次のコマンドを実行してください（cron 登録を推奨。進捗はこの画面に表示されます）:
+                                <pre class="mb-0 mt-2"><code>bin/console blastmail:sync{{ Config.diffMode ? '' : '' }}</code></pre>
+                                <small class="text-muted d-block mt-1">初回は全件送信になり、{{ (targetCount / Config.batchSize)|round(0, 'ceil') }} 本に分割して順に送ります。差分モードなら 2 回目以降は変化した会員だけになります。</small>
+                            </div>
+                        {% endif %}
+                        <div class="row mb-3">
+                            <div class="col-3">同期対象</div>
+                            <div class="col">
+                                <strong>{{ targetCount }}</strong> 名
+                                （{{ Config.syncTarget == 'mailmaga' ? 'メルマガ希望の本会員' : '本会員すべて' }}）
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-3">同期する項目</div>
+                            <div class="col">
+                                <span class="badge bg-secondary mr-1">メールアドレス → {{ Config.mapping.email|default('E-Mail') }}</span>
+                                {% for key, meta in mappedFields %}
+                                    <span class="badge bg-light text-dark border mr-1">{{ meta[0] }} → {{ Config.mapping[key] }}</span>
+                                {% else %}
+                                    <span class="text-muted">メールアドレスのみ（<a href="{{ url('blastmail_sync_admin_config') }}">設定</a>で購買属性などを追加できます）</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-3">同期方式</div>
+                            <div class="col">
+                                {{ Config.diffMode ? '差分（変化した会員だけ送る）' : '全件' }} ／
+                                配信状態は
+                                {%- if Config.statusPolicy == 'intent_merge_safe' %} 変更のあった側を採用（解除は覆さない）
+                                {%- elseif Config.statusPolicy == 'intent_merge' %} 変更のあった側を採用（あと勝ち。解除も覆す）
+                                {%- elseif Config.statusPolicy == 'source_authoritative' %} EC-CUBE を正として上書き
+                                {%- else %} blastmail 側を正（状態を送らない）
+                                {%- endif -%}
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-3">前回の同期</div>
+                            <div class="col">{{ Config.lastSyncAt ? Config.lastSyncAt|date('Y/m/d H:i') : '未実行' }}</div>
+                        </div>
+                        <div class="row">
+                            <div class="col-3"></div>
+                            <div class="col">
+                                <form method="post" action="{{ url('blastmail_sync_admin_run') }}" class="d-inline"
+                                      onsubmit="return confirm('{{ targetCount }} 名の会員を blastmail に同期します。よろしいですか？');">
+                                    <input type="hidden" name="{{ constant('Eccube\\Common\\Constant::TOKEN_NAME') }}" value="{{ csrf_token(constant('Eccube\\Common\\Constant::TOKEN_NAME')) }}">
+                                    {% set canRun = configured and not tooLarge and not running %}
+                                    <button type="submit" class="btn btn-ec-conversion px-4" {{ canRun ? '' : 'disabled' }}>今すぐ同期</button>
+                                </form>
+                                {% if Config.diffMode %}
+                                <form method="post" action="{{ url('blastmail_sync_admin_run', {'full': 1}) }}" class="d-inline ml-2"
+                                      onsubmit="return confirm('差分状態を無視して {{ targetCount }} 名全員を送ります。よろしいですか？');">
+                                    <input type="hidden" name="{{ constant('Eccube\\Common\\Constant::TOKEN_NAME') }}" value="{{ csrf_token(constant('Eccube\\Common\\Constant::TOKEN_NAME')) }}">
+                                    <button type="submit" class="btn btn-ec-regular" {{ canRun ? '' : 'disabled' }}>全件を送り直す</button>
+                                </form>
+                                {% endif %}
+                                <a href="{{ url('blastmail_sync_admin_preview') }}" class="btn btn-ec-regular ml-2">送信する CSV を確認（先頭 1,000 行）</a>
+                                <small class="text-muted d-block mt-2">
+                                    定期実行は <code>bin/console blastmail:sync</code> を cron に登録します。会員登録・編集・退会・削除は
+                                    {{ Config.eventSyncEnabled ? '即時に反映されます' : '即時反映が無効です' }}。
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card rounded border-0 mb-4">
+                    <div class="card-header"><span>blastmail の直近の配信</span></div>
+                    <div class="card-body">
+                        {% if historyError %}
+                            <div class="alert alert-danger">配信履歴の取得に失敗しました: {{ historyError }}</div>
+                        {% elseif history is empty %}
+                            <p class="text-muted">配信履歴がありません{{ configured ? '' : '（API 未設定）' }}。</p>
+                        {% else %}
+                            <table class="table table-sm">
+                                <thead>
+                                <tr><th>配信日時</th><th>件名</th><th>宛先</th><th class="text-right">配信数</th><th class="text-right">成功</th><th class="text-right">失敗</th><th>状態</th></tr>
+                                </thead>
+                                <tbody>
+                                {% for h in history %}
+                                    <tr>
+                                        <td>{{ h.date|default('') }}</td>
+                                        <td>{{ h.subject|default('') }}</td>
+                                        <td>{{ h.group|default('') }}</td>
+                                        <td class="text-right">{{ h.total|default('') }}</td>
+                                        <td class="text-right">{{ h.success|default('') }}</td>
+                                        <td class="text-right">{{ h.failure|default('') }}</td>
+                                        <td>{{ h.status|default('') }}</td>
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        {% endif %}
+                        <small class="text-muted">配信の作成・絞り込み・開封やクリックの分析は blastmail 管理画面で行います。</small>
+                    </div>
+                </div>
+
+                <div class="card rounded border-0 mb-4">
+                    <div class="card-header"><span>同期ログ（最新 20 件）</span></div>
+                    <div class="card-body p-0">
+                        {% if logs is empty %}
+                            <p class="text-muted p-3 mb-0">まだ同期は実行されていません。</p>
+                        {% else %}
+                            <table class="table table-sm mb-0">
+                                <thead>
+                                <tr><th>日時</th><th>契機</th><th class="text-right">対象</th><th class="text-right">成功</th><th class="text-right">失敗</th><th>結果</th></tr>
+                                </thead>
+                                <tbody>
+                                {% for log in logs %}
+                                    <tr class="{{ log.error ? 'table-danger' : (log.running ? 'table-info' : (log.failure > 0 ? 'table-warning' : '')) }}">
+                                        <td class="text-nowrap">{{ log.createDate|date('Y/m/d H:i:s') }}</td>
+                                        <td class="text-nowrap">{{ log.trigger }}{% if log.running %} <span class="badge bg-info">実行中</span>{% endif %}</td>
+                                        <td class="text-right">{{ log.total }}</td>
+                                        <td class="text-right">{{ log.success }}</td>
+                                        <td class="text-right">{{ log.failure }}</td>
+                                        <td><pre class="mb-0 small" style="white-space: pre-wrap">{{ log.message }}</pre></td>
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        {% endif %}
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+{% endblock %}

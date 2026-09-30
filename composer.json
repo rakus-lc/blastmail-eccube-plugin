@@ -1,0 +1,13 @@
+{
+  "name": "rakus-lc/blastmail-eccube-plugin",
+  "version": "1.0.0",
+  "description": "blastmail連携: EC-CUBE会員をblastmailの読者へ同期し、配信結果を管理画面で確認する",
+  "type": "eccube-plugin",
+  "license": "MIT",
+  "require": {
+    "ec-cube/plugin-installer": "~0.0.7 || ^2.0"
+  },
+  "extra": {
+    "code": "BlastmailSync"
+  }
+}
